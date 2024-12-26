@@ -1,0 +1,61 @@
+from flask import Flask, request, jsonify, redirect
+import random
+import string
+from flask_sqlalchemy import SQLAlchemy
+
+# Initialize Flask app and database
+app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///urls.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+db = SQLAlchemy(app)
+
+# Database model for URL mappings
+class URLMapping(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    short_url = db.Column(db.String(6), unique=True, nullable=False)
+    original_url = db.Column(db.String(2048), nullable=False)
+
+# Generate a random short URL
+def generate_short_url():
+    characters = string.ascii_letters + string.digits
+    return ''.join(random.choices(characters, k=6))
+
+@app.before_first_request
+def create_tables():
+    db.create_all()
+
+@app.route('/shorten', methods=['POST'])
+def shorten_url():
+    data = request.get_json()
+    original_url = data.get('original_url')
+
+    if not original_url:
+        return jsonify({"error": "Original URL is required"}), 400
+
+    # Check if the URL already exists
+    existing = URLMapping.query.filter_by(original_url=original_url).first()
+    if existing:
+        return jsonify({"short_url": request.host_url + existing.short_url}), 200
+
+    # Generate a unique short URL
+    short_url = generate_short_url()
+    while URLMapping.query.filter_by(short_url=short_url).first():
+        short_url = generate_short_url()
+
+    # Save the mapping in the database
+    new_mapping = URLMapping(short_url=short_url, original_url=original_url)
+    db.session.add(new_mapping)
+    db.session.commit()
+
+    return jsonify({"short_url": request.host_url + short_url}), 201
+
+@app.route('/<short_url>', methods=['GET'])
+def redirect_to_original(short_url):
+    mapping = URLMapping.query.filter_by(short_url=short_url).first()
+    if mapping:
+        return redirect(mapping.original_url)
+    return jsonify({"error": "URL not found"}), 404
+
+if __name__ == '__main__':
+    app.run(debug=True)
